@@ -7,6 +7,9 @@
 #include <AL/alc.h>
 #include <thread>
 #include <chrono>
+#include <vector>
+#include <stdlib.h>
+
 using namespace std;
 
 bool isBigEndian(){
@@ -64,29 +67,195 @@ char * loadWAV(const char* fn, int& chan, int& samplerate, int& bps, int& size)
     return data;
 }
 
+enum Sides {topRoom, botRoom, leftRoom, rightRoom};
+
 class room
 {
 private:
-    /* data */
+    string description;
+    string options;
+    vector<room*> connectedRooms;
+    vector<unsigned int> bufferids;
+    vector<unsigned int> sourceids;
+    vector<char*> wavData;
 public:
-    room(/* args */);
+    room(string roomDescription, string roomOptions, vector<char*> soundsPath);
+    void connectRoom(room* r, Sides roomPosition);
+    room* gotoRoom(Sides nextRoom);
+    void enterRoom();
+    void showOptions();
+    void getOptions();
+    void playSounds();
+    void pauseSounds();
+    void stopSounds();
     ~room();
 };
 
-room::room(/* args */)
+bool gameRunning = true;
+room* currentRoom = NULL;
+
+
+void room::enterRoom()
 {
+    system("clear");
+    room::showOptions();
+    room::getOptions();
+}
+
+void room::showOptions()
+{
+    cout << "Select one of the next options and press ENTER" << endl;
+    cout << "q: Quit Game" << endl;
+    cout << "l: Listen Sounds" << endl;
+    cout << options << endl;
+}
+
+void room::getOptions()
+{
+    char option = 0;
+    room* tmp = NULL;
+    cout << "-->> ";
+    cin >> option;
+    switch (option)
+    {
+    case 'w':
+        tmp = gotoRoom(topRoom);
+        break;
+    case 's':
+        tmp = gotoRoom(botRoom);
+        break;
+    case 'a':
+        tmp = gotoRoom(leftRoom);
+        break;
+    case 'd':
+        tmp = gotoRoom(rightRoom);
+        break;
+    case 'l':
+        cout << "Listening the Room... ONLY FOR FIVE SECONDS!!!";
+        this_thread::sleep_for(chrono::seconds(1));
+        room:playSounds();
+        room::enterRoom();
+        break;
+    case 'q':
+        tmp = NULL;
+        gameRunning = false;
+        break;
+    default:
+        cout << "Not a valid Option... Duh!";
+        room::getOptions();
+        break;
+    }
+    if (tmp != NULL)
+    {
+        currentRoom = tmp;
+    }
+    
+}
+
+room::room(string roomDescription, string roomOption, vector<char*> soundsPath)
+{
+    unsigned int bufferid, sourceid;
+    description = roomDescription;
+    options = roomOption;
+    int n = soundsPath.size();
+    int channel, sampleRate, bps, size;
+    char* data;
+    int format;
+    room* tmp = NULL;
+
+    //Create 4 posible next rooms
+    for (int i = 0; i < 4; i++)
+    {
+        connectedRooms.push_back(tmp);
+    }
+    
+    //Loads all wav data for the room and creates its buffers and sources
+    for(int i = 0; i < n; i++) {
+        data = loadWAV(soundsPath.at(i),channel,sampleRate,bps,size);
+        wavData.push_back(data);
+        alGenBuffers(1, &bufferid);
+        
+        if(channel==1)
+        {
+            if(bps==8)
+            {
+                format=AL_FORMAT_MONO8;
+            }else{
+                format=AL_FORMAT_MONO16;
+            }
+        }else{
+            if(bps == 8)
+            {
+                format=AL_FORMAT_STEREO8;
+            }else{
+                format=AL_FORMAT_STEREO16;
+            }
+        }
+        alBufferData(bufferid,format,data,size,sampleRate);
+        alGenSources(1,&sourceid);
+        alSourcei(sourceid,AL_BUFFER,bufferid);
+        
+        bufferids.push_back(bufferid);
+        sourceids.push_back(sourceid);
+    }
+}
+
+void room::connectRoom(room* r, Sides roomPosition)
+{
+    connectedRooms.at(roomPosition) = r;
+}
+
+room* room::gotoRoom(Sides nextRoom)
+{
+    return connectedRooms.at(nextRoom);
+}
+
+void room::playSounds()
+{
+    for (int i = 0; i < sourceids.size(); i++)
+    {
+        alSourcePlay(sourceids.at(i));
+    }
+    this_thread::sleep_for(chrono::seconds(5));
+    room::stopSounds();
+
+}
+
+void room::pauseSounds()
+{
+    for (int i = 0; i < sourceids.size(); i++)
+    {
+        alSourcePause(sourceids.at(i));
+    }
+}
+
+void room::stopSounds()
+{
+    for (int i = 0; i < sourceids.size(); i++)
+    {
+        alSourceStop(sourceids.at(i));
+    }
 }
 
 room::~room()
 {
+    connectedRooms.clear();
+    for (int i = 0; i < bufferids.size(); i++)
+    {     
+        alDeleteSources(1,&bufferids.at(i));
+        alDeleteBuffers(1,&bufferids.at(i));
+    }
+    for (int i = 0; i < wavData.size(); i++)
+    {     
+        delete [] wavData.at(i);
+    }
+    wavData.clear();
+    
 }
-
-
 
 int main(int argc, char** argv)
 {
-    int channel, sampleRate, bps, size;
-    char* data = loadWAV("./assets/sounds/Battle.wav",channel,sampleRate,bps,size);
+    //INITIALIZATION   
     ALCdevice* device = alcOpenDevice(NULL);
     if(device == NULL)
     {
@@ -101,47 +270,32 @@ int main(int argc, char** argv)
     }
     alcMakeContextCurrent(context);
     
-    unsigned int bufferid;
-    alGenBuffers(1, &bufferid);
-
-    int format;
-    if(channel==1)
-    {
-        if(bps==8)
-        {
-            format=AL_FORMAT_MONO8;
-        }else{
-            format=AL_FORMAT_MONO16;
-        }
-    }else{
-        if(bps == 8)
-        {
-            format=AL_FORMAT_STEREO8;
-        }else{
-            format=AL_FORMAT_STEREO16;
-        }
-    }
-    alBufferData(bufferid,format,data,size,sampleRate);
-    unsigned int sourceid;
-    alGenSources(1,&sourceid);
-    alSourcei(sourceid,AL_BUFFER,bufferid);
-    
     ALfloat listenerOri[] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f};
+    alListener3f(AL_POSITION, 0.0f, 0.0f, 1.0f);
+    // check for errors
+    alListener3f(AL_VELOCITY, 0, 0, 0);
+    // check for errors
+    alListenerfv(AL_ORIENTATION, listenerOri);
+    // check for errors
 
-    alSourcePlay(sourceid);
-
-    // char select = 0;
-    // while(select != 'q'){
-    //     cin >> select;
-    // }
-    this_thread::sleep_for(chrono::seconds(5));
-
-    alDeleteSources(1,&sourceid);
-    alDeleteBuffers(1,&bufferid);
+    vector<char*> paths;
+    paths.push_back("./assets/sounds/Gun1.wav");
+    paths.push_back("./assets/sounds/Gun2.wav");
+    room testRoom1("This is a test Room A","w: go to the dragon's dorm\ns: Exit the Cave\na: Make poop\nd: I dunno", paths);
+    room testRoom2("This is a test Room B","option a; option b; option c;", paths);
+    testRoom1.connectRoom(&testRoom2, topRoom);
+    testRoom2.connectRoom(&testRoom1, botRoom);
+    currentRoom = &testRoom1;
+    //GAME LOOP
+    while (gameRunning)
+    {
+        currentRoom->enterRoom();
+    }
+    
     
 
     alcDestroyContext(context);
     alcCloseDevice(device);
-    delete [] data;
+    
     return 0;
 }
