@@ -278,13 +278,37 @@ int main(int argc, char** argv)
     alListenerfv(AL_ORIENTATION, listenerOri);
     // check for errors
 
-    vector<char*> paths;
-    paths.push_back("./assets/sounds/Gun1.wav");
-    paths.push_back("./assets/sounds/Gun2.wav");
-    room testRoom1("This is a test Room A","w: go to the dragon's dorm\ns: Exit the Cave\na: Make poop\nd: I dunno", paths);
-    room testRoom2("This is a test Room B","option a; option b; option c;", paths);
+    vector<char*> salon1;
+    salon1.push_back("./assets/sounds/class.wav");
+
+    vector<char*> campamento1;
+    campamento1.push_back("./assets/sounds/night.wav");
+
+    vector<char*> aereoupuerto1;
+    aereoupuerto1.push_back("./assets/sounds/airplaneatgate.wav");
+
+    vector<char*> piscina1;
+    piscina1.push_back("./assets/sounds/nightwater.wav");
+
+    room testRoom1("Este es el salon de Clases","w: ir al campamento\na: Ir al aereoupuerto\nd: Ir a la piscina", salon1);
+    room testRoom2("Este es el campamento","w: ir a clase\n", campamento1);
+    room testRoom3("Este es el aereoupuerto","d: ir a clase\n", aereoupuerto1);
+    room testRoom4("Este es la piscina","a: ir a clase\n", piscina1);
+
+    //enum Sides {topRoom, botRoom, leftRoom, rightRoom};
+
     testRoom1.connectRoom(&testRoom2, topRoom);
+    testRoom1.connectRoom(&testRoom3, leftRoom);
+    testRoom1.connectRoom(&testRoom4, rightRoom);
+
     testRoom2.connectRoom(&testRoom1, botRoom);
+
+    testRoom3.connectRoom(&testRoom1, rightRoom);
+
+    testRoom4.connectRoom(&testRoom1, leftRoom);
+    
+
+
     currentRoom = &testRoom1;
     //GAME LOOP
     while (gameRunning)
