@@ -311,7 +311,7 @@ int main(int argc, char** argv)
 
     room room1(
         "Aqui el personaje escucha una brisa por a alguno de los lados. Asi se guia y se da cuenta de que hay una salida de la cueva. Porque hay brisa",
-    "w: Seguir hacia adelante\na: Ir a la izquierda\nd: Ir a la derecha\ns: Ir atras", HuesosSounds);
+    "a: Ir a la izquierda\nd: Ir a la derecha\ns: Ir atras", HuesosSounds);
 
     room Huesos(
         "Te resbalas hacia un hueco y caes en unos huesos",
@@ -319,7 +319,7 @@ int main(int argc, char** argv)
 
     room Dragon(
         "Tienes al frente tuyo un dragon dormido",
-    "a: Ir hacia la izquierda\n Ir hacia la derecha\n Volver a los huesos", HuesosSounds);
+    "a: Ir hacia la izquierda\nd: Ir hacia la derecha\ns: Volver a los huesos", HuesosSounds);
 
     room TesoroDragon(
         "",
@@ -352,7 +352,8 @@ int main(int argc, char** argv)
     Entrance.connectRoom(&room1,topRoom);
 
     room1.connectRoom(&Entrance,botRoom);
-    room1.connectRoom(&Huesos,topRoom);
+    room1.connectRoom(&Huesos,leftRoom); // a para ir a los huesos
+    room1.connectRoom(&room1,rightRoom); // d para ir donde los sabios. Esta parte no esta hecha
     //Aqui faltaria agregar las otras opciones desde esta habitacion
 
     Huesos.connectRoom(&Dragon,topRoom);
