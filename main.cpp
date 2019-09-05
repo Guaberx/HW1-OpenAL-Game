@@ -12,6 +12,13 @@
 
 using namespace std;
 
+struct sound
+{
+    char* path;
+    int x,y,z;
+}typedef sound;
+
+
 bool isBigEndian(){
     int a = 1;
     return !((char*)&a)[0];
@@ -79,7 +86,7 @@ private:
     vector<unsigned int> sourceids;
     vector<char*> wavData;
 public:
-    room(string roomDescription, string roomOptions, vector<char*> soundsPath);
+    room(string roomDescription, string roomOptions, vector<sound> sounds);
     void connectRoom(room* r, Sides roomPosition);
     room* gotoRoom(Sides nextRoom);
     void enterRoom();
@@ -99,12 +106,12 @@ void room::enterRoom()
 {
     system("clear");
     //Tittle
-    cout << "  _________                        .___ .____          ___.         .__        __"   << endl;
-    cout << " /   _____/ ____  __ __  ____    __| _/ |    |   _____ \\_ |_________|__| _____/  |_ "<< endl;
-    cout << " \\_____  \\ /  _ \\|  |  \\/    \\  / __ |  |    |   \\__  \\ | __ \\_  __ \\  |/    \\   __\\"<< endl;
-    cout << " /        (  <_> )  |  /   |  \\/ /_/ |  |    |___ / __ \\| \\_\\ \\  | \\/  |   |  \\  |  "<< endl;
-    cout << "/_______  /\\____/|____/|___|  /\\____ |  |_______ (____  /___  /__|  |__|___|  /__|  "<< endl;
-    cout << "        \\/                  \\/      \\/          \\/    \\/    \\/              \\/      "<< endl;
+    cout << "                               .___ .____          ___.                 .__        __  .__     " << endl;
+    cout << "  __________  __ __  ____    __| _/ |    |   _____ \\_ |__ ___.__._______|__| _____/  |_|  |__  " << endl;
+    cout << " /  ___/  _ \\|  |  \\/    \\  / __ |  |    |   \\__  \\ | __ <   |  |\\_  __ \\  |/    \\   __\\  |  \\ " << endl;
+    cout << " \\___ (  <_> )  |  /   |  \\/ /_/ |  |    |___ / __ \\| \\_\\ \\___  | |  | \\/  |   |  \\  | |   Y  \\" << endl;
+    cout << "/____  >____/|____/|___|  /\\____ |  |_______ (____  /___  / ____| |__|  |__|___|  /__| |___|  /" << endl;
+    cout << "     \\/                 \\/      \\/          \\/    \\/    \\/\\/                    \\/          \\/ " << endl;
     //Description
     cout << endl << description << endl << endl;
     //Options
@@ -162,12 +169,12 @@ void room::getOptions()
     
 }
 
-room::room(string roomDescription, string roomOption, vector<char*> soundsPath)
+room::room(string roomDescription, string roomOption, vector<sound> sounds)
 {
     unsigned int bufferid, sourceid;
     description = roomDescription;
     options = roomOption;
-    int n = soundsPath.size();
+    int n = sounds.size();
     int channel, sampleRate, bps, size;
     char* data;
     int format;
@@ -181,7 +188,7 @@ room::room(string roomDescription, string roomOption, vector<char*> soundsPath)
     
     //Loads all wav data for the room and creates its buffers and sources
     for(int i = 0; i < n; i++) {
-        data = loadWAV(soundsPath.at(i),channel,sampleRate,bps,size);
+        data = loadWAV(sounds.at(i).path,channel,sampleRate,bps,size);
         wavData.push_back(data);
         alGenBuffers(1, &bufferid);
         
@@ -207,6 +214,7 @@ room::room(string roomDescription, string roomOption, vector<char*> soundsPath)
         
         bufferids.push_back(bufferid);
         sourceids.push_back(sourceid);
+        alSource3f(sourceid,AL_POSITION,sounds.at(i).x,sounds.at(i).y,sounds.at(i).z);
     }
 }
 
@@ -288,49 +296,21 @@ int main(int argc, char** argv)
     alListenerfv(AL_ORIENTATION, listenerOri);
     // check for errors
 
-    vector<char*> soundsSalon;
-    soundsSalon.push_back("./assets/sounds/class.wav");
+    vector<sound> EntranceSounds;
+    EntranceSounds.push_back({"./assets/sounds/Battle.wav",0,0,0});
 
-    vector<char*> soundsCampamento;
-    soundsCampamento.push_back("./assets/sounds/night.wav");
-
-    vector<char*> soundsAeropuerto;
-    soundsAeropuerto.push_back("./assets/sounds/airplaneatgate.wav");
-
-    vector<char*> soundsPiscina;
-    soundsPiscina.push_back("./assets/sounds/nightwater.wav");
-
-    vector<char*> soundsBatalla;
-    soundsBatalla.push_back("./assets/sounds/Battle.wav");
-
-    room salon("Este es el salon de Clases","w: ir al campamento\na: Ir al aereoupuerto\nd: Ir a la piscina", soundsSalon);
-    room campamento("Este es el campamento","s: ir a clase\n", soundsCampamento);
-    room aeropuerto("Este es el aereoupuerto","d: ir a clase\n", soundsAeropuerto);
-    room piscina("Este es la piscina","a: ir a clase\ns: Ir a la BATALLA!!!!", soundsPiscina);
-    room batalla("Bienvenido a la Batalla PUTOS!!!!!\nDe ahora en adelante deberan cuidar su propia vida y nadie, absolutamente nadie los endra en cuenta HIJOS DE SU PUTA MADRE.\nAhora vayan a la batalla y luchen con mi pais","w: Volver a la piscina\na: ir a clase\n", soundsBatalla);
-
+    room Entrance(
+        "Te acabas de despertar...\nNotas que estas en un lugar obscuro. Parece una cueva y solo entran unos pocos rayos de luz.\n\
+        Notas que la entrada ha quedado obstruida por una gran piedra y parece que tu unica opcion es seguir adelante",
+    "w: Adentrarse en la cueva", EntranceSounds);
+    
     //enum Sides {topRoom, botRoom, leftRoom, rightRoom};
-
-    salon.connectRoom(&campamento, topRoom);
-    salon.connectRoom(&aeropuerto, leftRoom);
-    salon.connectRoom(&piscina, rightRoom);
-
-    campamento.connectRoom(&salon, botRoom);
-
-    aeropuerto.connectRoom(&salon, rightRoom);
-
-    piscina.connectRoom(&salon, leftRoom);
-    piscina.connectRoom(&batalla, botRoom);
-
-    batalla.connectRoom(&piscina, topRoom);
-
-    currentRoom = &salon;
+    currentRoom = &Entrance;
     //GAME LOOP
     while (gameRunning)
     {
         currentRoom->enterRoom();
     }
-    
 
     alcDestroyContext(context);
     alcCloseDevice(device);

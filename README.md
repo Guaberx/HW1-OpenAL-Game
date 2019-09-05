@@ -10,3 +10,7 @@ sudo apt-get install libopenal-dev
 
 # In order to Compile with g++ run the next line (note you must have openal installed):
 g++ -std=c++11 -o main main.cpp -lopenal -lpthread
+
+# Notes
+All sounds must be in WAV format.
+If needed to position a sound in the space, then the sound must be Mono.
