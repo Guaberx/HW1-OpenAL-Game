@@ -297,14 +297,87 @@ int main(int argc, char** argv)
     // check for errors
 
     vector<sound> EntranceSounds;
-    EntranceSounds.push_back({"./assets/sounds/Battle.wav",0,0,0});
+    vector<sound> HuesosSounds;
+    //Cuando se agrega un sonido, 
+    EntranceSounds.push_back({"./assets/sounds/Battle.wav",10,0,-1});
+    EntranceSounds.push_back({"./assets/sounds/Gun1.wav",-10,0,-1});
+
+    HuesosSounds.push_back({"./assets/sounds/Gun2.wav",10,0,-1});
 
     room Entrance(
         "Te acabas de despertar...\nNotas que estas en un lugar obscuro. Parece una cueva y solo entran unos pocos rayos de luz.\n\
         Notas que la entrada ha quedado obstruida por una gran piedra y parece que tu unica opcion es seguir adelante",
     "w: Adentrarse en la cueva", EntranceSounds);
-    
+
+    room room1(
+        "Aqui el personaje escucha una brisa por a alguno de los lados. Asi se guia y se da cuenta de que hay una salida de la cueva. Porque hay brisa",
+    "w: Seguir hacia adelante\na: Ir a la izquierda\nd: Ir a la derecha\ns: Ir atras", HuesosSounds);
+
+    room Huesos(
+        "Te resbalas hacia un hueco y caes en unos huesos",
+    "w: Seguir hacia adelante\n", HuesosSounds);
+
+    room Dragon(
+        "Tienes al frente tuyo un dragon dormido",
+    "a: Ir hacia la izquierda\n Ir hacia la derecha\n Volver a los huesos", HuesosSounds);
+
+    room TesoroDragon(
+        "",
+    "w: Coger Parte del Tesoro\nd: Ir a la derecha (Devolverse)", HuesosSounds);
+
+    room CogerParteTesoro(
+        "Hoyes que el dragon se ha despertado -> dice quien ha cogido mi tesoro o algo asi",
+    "w: Intentar huir del dragon", HuesosSounds);
+
+    room RioAfuera(
+        "",
+    "a: Ir a la derecha\nd: Meterse al agua", HuesosSounds);
+
+    room RioNadando(
+        "Llevas mucho tiempo nadando en aquel rio obscuro. No sabes si saldras con vida",
+    "w: Seguir nadando\n:s Ahogarse!", HuesosSounds);
+
+    room Win(
+        "Ganaste el juego",
+    "w: Volver a jugar", HuesosSounds);
+
+    room GameOver(
+        "\n\nHas Perdido!!!\n\n",
+    "w: Volver a jugar", HuesosSounds);
+
+
     //enum Sides {topRoom, botRoom, leftRoom, rightRoom};
+
+
+    Entrance.connectRoom(&room1,topRoom);
+
+    room1.connectRoom(&Entrance,botRoom);
+    room1.connectRoom(&Huesos,topRoom);
+    //Aqui faltaria agregar las otras opciones desde esta habitacion
+
+    Huesos.connectRoom(&Dragon,topRoom);
+
+    Dragon.connectRoom(&TesoroDragon, leftRoom);// seleccionando a
+    Dragon.connectRoom(&RioAfuera, rightRoom);// seleccionando d
+    Dragon.connectRoom(&Huesos, botRoom);// seleccionando s
+
+    TesoroDragon.connectRoom(&CogerParteTesoro, topRoom);// seleccionando w
+    TesoroDragon.connectRoom(&Dragon, rightRoom);// seleccionando d
+
+    CogerParteTesoro.connectRoom(&GameOver, topRoom);// Aqui el dragon se despierta, esta rugiendo y haciendo sonidos miedosos.
+
+    RioAfuera.connectRoom(&Dragon, leftRoom); // a Devolverse a donde el dragon
+    RioAfuera.connectRoom(&RioNadando, topRoom); // w Entrar al rio y seguir su curso
+
+    RioNadando.connectRoom(&Win, topRoom); // w Seguir nadando
+    RioNadando.connectRoom(&Win, botRoom); // s Ahogarse
+
+    Win.connectRoom(&Entrance, topRoom);
+    GameOver.connectRoom(&Entrance, topRoom);
+
+
+    
+    
     currentRoom = &Entrance;
     //GAME LOOP
     while (gameRunning)
