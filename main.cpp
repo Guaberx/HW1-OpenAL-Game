@@ -299,10 +299,10 @@ int main(int argc, char** argv)
     vector<sound> EntranceSounds;
     vector<sound> HuesosSounds;
     //Cuando se agrega un sonido, 
-    EntranceSounds.push_back({"./assets/sounds/Battle.wav",10,0,-1});
-    EntranceSounds.push_back({"./assets/sounds/Gun1.wav",-10,0,-1});
+    EntranceSounds.push_back({"./assets/sounds/Battle.wav",10,0,1});
+    EntranceSounds.push_back({"./assets/sounds/Gun1.wav",-10,0,1});
 
-    HuesosSounds.push_back({"./assets/sounds/Gun2.wav",10,0,-1});
+    HuesosSounds.push_back({"./assets/sounds/Gun2.wav",10,0,1});
 
     room Entrance(
         "Te acabas de despertar...\nNotas que estas en un lugar obscuro. Parece una cueva y solo entran unos pocos rayos de luz.\n\
