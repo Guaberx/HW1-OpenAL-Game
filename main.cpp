@@ -85,6 +85,7 @@ private:
     vector<unsigned int> bufferids;
     vector<unsigned int> sourceids;
     vector<char*> wavData;
+    thread roomSounds;
 public:
     room(string roomDescription, string roomOptions, vector<sound> sounds);
     void connectRoom(room* r, Sides roomPosition);
@@ -101,22 +102,29 @@ public:
 bool gameRunning = true;
 room* currentRoom = NULL;
 
-
 void room::enterRoom()
 {
-    system("clear");
-    //Tittle
-    cout << "                               .___ .____          ___.                 .__        __  .__     " << endl;
-    cout << "  __________  __ __  ____    __| _/ |    |   _____ \\_ |__ ___.__._______|__| _____/  |_|  |__  " << endl;
-    cout << " /  ___/  _ \\|  |  \\/    \\  / __ |  |    |   \\__  \\ | __ <   |  |\\_  __ \\  |/    \\   __\\  |  \\ " << endl;
-    cout << " \\___ (  <_> )  |  /   |  \\/ /_/ |  |    |___ / __ \\| \\_\\ \\___  | |  | \\/  |   |  \\  | |   Y  \\" << endl;
-    cout << "/____  >____/|____/|___|  /\\____ |  |_______ (____  /___  / ____| |__|  |__|___|  /__| |___|  /" << endl;
-    cout << "     \\/                 \\/      \\/          \\/    \\/    \\/\\/                    \\/          \\/ " << endl;
-    //Description
-    cout << endl << description << endl << endl;
-    //Options
-    room::showOptions();
-    room::getOptions();
+    roomSounds = thread(&room::playSounds,this);
+    while (currentRoom == this && gameRunning)
+    {
+        /* code */
+        system("clear");
+        //Tittle
+        cout << "                               .___ .____          ___.                 .__        __  .__     " << endl;
+        cout << "  __________  __ __  ____    __| _/ |    |   _____ \\_ |__ ___.__._______|__| _____/  |_|  |__  " << endl;
+        cout << " /  ___/  _ \\|  |  \\/    \\  / __ |  |    |   \\__  \\ | __ <   |  |\\_  __ \\  |/    \\   __\\  |  \\ " << endl;
+        cout << " \\___ (  <_> )  |  /   |  \\/ /_/ |  |    |___ / __ \\| \\_\\ \\___  | |  | \\/  |   |  \\  | |   Y  \\" << endl;
+        cout << "/____  >____/|____/|___|  /\\____ |  |_______ (____  /___  / ____| |__|  |__|___|  /__| |___|  /" << endl;
+        cout << "     \\/                 \\/      \\/          \\/    \\/    \\/\\/                    \\/          \\/ " << endl;
+        //Description
+        cout << endl << description << endl << endl;
+        //Options
+        room::showOptions();
+        room::getOptions();
+    }
+    roomSounds.detach();
+    room::stopSounds();
+    
 }
 
 void room::showOptions()
@@ -148,10 +156,9 @@ void room::getOptions()
         tmp = gotoRoom(rightRoom);
         break;
     case 'l':
-        
         cout << "Listening the Room... ONLY FOR FIVE SECONDS!!!" << endl;
         room:playSounds();
-        room::enterRoom();
+        //room::enterRoom();
         break;
     case 'q':
         tmp = NULL;
@@ -163,7 +170,7 @@ void room::getOptions()
         break;
     }
     if (tmp != NULL)
-    {
+    {   
         currentRoom = tmp;
     }
     
@@ -179,7 +186,6 @@ room::room(string roomDescription, string roomOption, vector<sound> sounds)
     char* data;
     int format;
     room* tmp = NULL;
-
     //Create 4 posible next rooms
     for (int i = 0; i < 4; i++)
     {
@@ -211,6 +217,7 @@ room::room(string roomDescription, string roomOption, vector<sound> sounds)
         alBufferData(bufferid,format,data,size,sampleRate);
         alGenSources(1,&sourceid);
         alSourcei(sourceid,AL_BUFFER,bufferid);
+        alSourcei(sourceid,AL_LOOPING, AL_TRUE);
         
         bufferids.push_back(bufferid);
         sourceids.push_back(sourceid);
@@ -297,12 +304,49 @@ int main(int argc, char** argv)
     // check for errors
 
     vector<sound> EntranceSounds;
+    vector<sound> room1Sounds;
     vector<sound> HuesosSounds;
+    vector<sound> DragonSounds;
+    vector<sound> TesoroDragonSounds;
+    vector<sound> CogerParteTesoroSounds;
+    vector<sound> RioAfueraSounds;
+    vector<sound> RioNadandoSounds;
+    vector<sound> WinSounds;
+    vector<sound> GameOverSounds;
     //Cuando se agrega un sonido, 
-    EntranceSounds.push_back({"./assets/sounds/Battle.wav",10,0,1});
-    EntranceSounds.push_back({"./assets/sounds/Gun1.wav",-10,0,1});
+    EntranceSounds.push_back({"./assets/sounds/Sonido de la cueva.wav",0,0,0});
+    EntranceSounds.push_back({"./assets/sounds/algo.wav",0,0,0});
 
-    HuesosSounds.push_back({"./assets/sounds/Gun2.wav",10,0,1});
+    room1Sounds.push_back({"./assets/sounds/Sonido de la cueva.wav",0,0,0});
+    room1Sounds.push_back({"./assets/sounds/Pasos Caminando.wav",0,0,0});
+
+    HuesosSounds.push_back({"./assets/sounds/Sonido de la cueva.wav",0,0,0});
+    HuesosSounds.push_back({"./assets/sounds/mono/Sonido Fractura de huesos.wav",2,0,3});
+    HuesosSounds.push_back({"./assets/sounds/mono/Sonido Fractura de huesos.wav",-2,0,-1});
+    HuesosSounds.push_back({"./assets/sounds/mono/Sonido Dragon Durmiendo.wav",0,0,15});
+
+    DragonSounds.push_back({"./assets/sounds/Sonido Dragon Durmiendo.wav",0,0,0});
+
+    TesoroDragonSounds.push_back({"./assets/sounds/Sonido Tesoro.wav",0,0,0});
+    
+    CogerParteTesoroSounds.push_back({"./assets/sounds/test.wav",0,0,0});
+
+    RioAfueraSounds.push_back({"./assets/sounds/Sonido agua.wav",0,0,0});
+    
+    RioNadandoSounds.push_back({"./assets/sounds/mono/Sonido agua.wav",0,0,0});
+    
+    WinSounds.push_back({"./assets/sounds/mono/Sonido algo.wav",0,0,0});
+
+    GameOverSounds.push_back({"./assets/sounds/mono/Sonido Fuego Dragon.wav",0,0,0});
+    GameOverSounds.push_back({"./assets/sounds/mono/Sonido Entorno en Llamas.wav",0,0,0});
+    GameOverSounds.push_back({"./assets/sounds/mono/Sonido Fuego Dragon.wav",0,0,0});
+    GameOverSounds.push_back({"./assets/sounds/mono/Sonido Cuerpo Quemandose.wav",0,0,0});
+
+
+
+    
+
+    
 
     room Entrance(
         "Te acabas de despertar...\nNotas que estas en un lugar obscuro. Parece una cueva y solo entran unos pocos rayos de luz.\n\
@@ -311,7 +355,7 @@ int main(int argc, char** argv)
 
     room room1(
         "Aqui el personaje escucha una brisa por a alguno de los lados. Asi se guia y se da cuenta de que hay una salida de la cueva. Porque hay brisa",
-    "a: Ir a la izquierda\nd: Ir a la derecha\ns: Ir atras", HuesosSounds);
+    "a: Ir a la izquierda\nd: Ir a la derecha\ns: Ir atras", room1Sounds);
 
     room Huesos(
         "Te resbalas hacia un hueco y caes en unos huesos",
@@ -319,31 +363,31 @@ int main(int argc, char** argv)
 
     room Dragon(
         "Tienes al frente tuyo un dragon dormido",
-    "a: Ir hacia la izquierda\nd: Ir hacia la derecha\ns: Volver a los huesos", HuesosSounds);
+    "a: Ir hacia la izquierda\nd: Ir hacia la derecha\ns: Volver a los huesos", DragonSounds);
 
     room TesoroDragon(
-        "",
-    "w: Coger Parte del Tesoro\nd: Ir a la derecha (Devolverse)", HuesosSounds);
+        "Ves el tesoro y quedas asombrado de las riquezas del dragon",
+    "w: Coger Parte del Tesoro\nd: Ir a la derecha (Devolverse)", TesoroDragonSounds);
 
     room CogerParteTesoro(
-        "Hoyes que el dragon se ha despertado -> dice quien ha cogido mi tesoro o algo asi",
-    "w: Intentar huir del dragon", HuesosSounds);
+        "El dragon se ha despertado mientras coges parte de su tesoro",
+    "w: Intentar huir del dragon", CogerParteTesoroSounds);
 
     room RioAfuera(
         "",
-    "a: Ir a la derecha\nd: Meterse al agua", HuesosSounds);
+    "a: Ir a la derecha\nw: Meterse al agua", RioAfueraSounds);
 
     room RioNadando(
         "Llevas mucho tiempo nadando en aquel rio obscuro. No sabes si saldras con vida",
-    "w: Seguir nadando\n:s Ahogarse!", HuesosSounds);
+    "w: Seguir nadando\n:s Ahogarse!", RioNadandoSounds);
 
     room Win(
         "Ganaste el juego",
-    "w: Volver a jugar", HuesosSounds);
+    "w: Volver a jugar", WinSounds);
 
     room GameOver(
         "\n\nHas Perdido!!!\n\n",
-    "w: Volver a jugar", HuesosSounds);
+    "w: Volver a jugar", GameOverSounds);
 
 
     //enum Sides {topRoom, botRoom, leftRoom, rightRoom};
