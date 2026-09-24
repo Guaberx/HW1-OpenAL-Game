@@ -6,8 +6,12 @@
 #include <AL/al.h>
 #include <AL/alc.h>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <chrono>
 #include <vector>
+#include <map>
+#include <string>
 #include <stdlib.h>
 
 using namespace std;
@@ -44,9 +48,24 @@ bool alCheckError(const char* what, const char* file, int line)
 
 #define AL_CHECK(expr) do { (expr); alCheckError(#expr, __FILE__, __LINE__); } while(0)
 
+void clearScreen()
+{
+#ifdef _WIN32
+    system("cls");
+#else
+    system("clear");
+#endif
+}
+
+// Buffers are shared between rooms, keyed by file path: a file used by several
+// rooms is decoded and uploaded once. Defined in getBuffer() below; freed here
+// because buffers outlive every room.
+extern map<string, ALuint> bufferCache;
+void freeBufferCache();
+
 // Owns the device/context so they are torn down by the destructor. Declare it
 // before any room: rooms must still have a live context when they delete their
-// sources and buffers.
+// sources, and the shared buffers must go after every source is gone.
 struct ALContextGuard
 {
     ALCdevice*  device;
@@ -54,6 +73,7 @@ struct ALContextGuard
     ALContextGuard() : device(NULL), context(NULL) {}
     ~ALContextGuard()
     {
+        freeBufferCache();
         alcMakeContextCurrent(NULL);
         if(context) alcDestroyContext(context);
         if(device)  alcCloseDevice(device);
@@ -67,114 +87,126 @@ struct sound
 }typedef sound;
 
 
-bool isBigEndian(){
-    int a = 1;
-    return !((char*)&a)[0];
-}
-
-int convertToInt(char* buffer, int len)
+// WAV integers are ALWAYS little-endian, so byte i carries weight 2^(8*i).
+// Building the value by shifting is correct on every host, which is why the old
+// isBigEndian() byte-copy (it wrote a 2-byte value into the wrong half on
+// big-endian machines) is gone.
+int convertToInt(const char* buffer, int len)
 {
     int a = 0;
-    if(isBigEndian())
+    for(int i = 0; i < len; i++)
     {
-        for(int i = 0; i < len; i++)
-        {
-            ((char*)&a)[3-i] = buffer[i];
-        }
-    }else
-    {
-        for(int i = 0; i < len; i++)
-        {
-            ((char*)&a)[i] = buffer[i];
-        }
+        a |= (int)(unsigned char)buffer[i] << (8*i);
     }
     return a;
 }
 
-// Loads 8/16-bit PCM WAV. On ANY failure it prints the reason, returns NULL and
+// Loads 8/16-bit PCM WAV. Walks the RIFF chunk list instead of assuming a
+// fixed header layout, so files carrying LIST/fact/extensible chunks before
+// "data" load correctly. On ANY failure it prints the reason, returns NULL and
 // leaves chan/samplerate/bps/size at 0 -- the caller must not use them.
 char * loadWAV(const char* fn, int& chan, int& samplerate, int& bps, int& size)
 {
     chan = 0; samplerate = 0; bps = 0; size = 0;
 
-    char buffer[4];
+    char id[4];
+    char header[16];
     ifstream in(fn, ios::binary);
     if(!in)
     {
         cerr << "CANNOT OPEN FILE: " << fn << endl;
         return NULL;
     }
-    if(!in.read(buffer,4) || strncmp(buffer,"RIFF",4)!=0)
+    if(!in.read(id,4) || strncmp(id,"RIFF",4)!=0)
     {
         cerr << "THIS IS NOT A WAV FILE: " << fn << endl;
         return NULL;
     }
-    in.read(buffer,4);                                  //riff chunk size
-    if(!in.read(buffer,4) || strncmp(buffer,"WAVE",4)!=0)
+    in.read(id,4);                                       //riff chunk size
+    if(!in.read(id,4) || strncmp(id,"WAVE",4)!=0)
     {
         cerr << "MISSING WAVE HEADER: " << fn << endl;
         return NULL;
     }
-    if(!in.read(buffer,4) || strncmp(buffer,"fmt ",4)!=0)
+
+    bool haveFmt = false;
+    int audioFormat = 0;
+
+    //Walk chunks until "data", skipping anything we do not understand.
+    while(true)
     {
-        cerr << "MISSING fmt CHUNK: " << fn << endl;
-        return NULL;
+        char sizeField[4];
+        if(!in.read(id,4) || !in.read(sizeField,4))
+        {
+            cerr << (haveFmt ? "MISSING data CHUNK: " : "MISSING fmt CHUNK: ") << fn << endl;
+            chan = 0; samplerate = 0; bps = 0;
+            return NULL;
+        }
+        int chunkSize = convertToInt(sizeField,4);
+        if(chunkSize < 0)
+        {
+            cerr << "INVALID CHUNK SIZE: " << fn << endl;
+            chan = 0; samplerate = 0; bps = 0;
+            return NULL;
+        }
+
+        if(strncmp(id,"fmt ",4)==0)
+        {
+            if(chunkSize < 16 || !in.read(header,16))
+            {
+                cerr << "TRUNCATED fmt CHUNK: " << fn << endl;
+                return NULL;
+            }
+            audioFormat = convertToInt(header,2);         //1 = uncompressed PCM
+            chan        = convertToInt(header+2,2);
+            samplerate  = convertToInt(header+4,4);
+            //header+8 byte rate, header+12 block align
+            bps         = convertToInt(header+14,2);
+            haveFmt     = true;
+            if(chunkSize > 16) in.seekg(chunkSize - 16, ios::cur);
+        }
+        else if(strncmp(id,"data",4)==0)
+        {
+            if(!haveFmt)
+            {
+                cerr << "data CHUNK BEFORE fmt CHUNK: " << fn << endl;
+                return NULL;
+            }
+            size = chunkSize;
+            break;
+        }
+        else
+        {
+            in.seekg(chunkSize, ios::cur);                //LIST, fact, ...
+        }
+
+        if(chunkSize & 1) in.seekg(1, ios::cur);          //chunks are word-aligned
+        if(!in)
+        {
+            cerr << "TRUNCATED FILE WHILE SCANNING CHUNKS: " << fn << endl;
+            chan = 0; samplerate = 0; bps = 0;
+            return NULL;
+        }
     }
-    if(!in.read(buffer,4))
-    {
-        cerr << "TRUNCATED fmt CHUNK: " << fn << endl;
-        return NULL;
-    }
-    int fmtSize = convertToInt(buffer,4);
-    in.read(buffer,2);
-    int audioFormat = convertToInt(buffer,2);           //1 = uncompressed PCM
-    in.read(buffer,2);
-    chan = convertToInt(buffer,2);
-    in.read(buffer,4);
-    samplerate = convertToInt(buffer,4);
-    in.read(buffer,4);                                  //byte rate
-    in.read(buffer,2);                                  //block align
-    if(!in.read(buffer,2))
-    {
-        cerr << "TRUNCATED fmt CHUNK: " << fn << endl;
-        chan = 0; samplerate = 0;
-        return NULL;
-    }
-    bps = convertToInt(buffer,2);
-    if(fmtSize > 16) in.seekg(fmtSize - 16, ios::cur);  //skip WAVE_FORMAT_EXTENSIBLE tail
 
     if(audioFormat != 1)
     {
         cerr << "NOT UNCOMPRESSED PCM (format " << audioFormat << "): " << fn << endl;
-        chan = 0; samplerate = 0; bps = 0;
+        chan = 0; samplerate = 0; bps = 0; size = 0;
         return NULL;
     }
     if(chan != 1 && chan != 2)
     {
         cerr << "UNSUPPORTED CHANNEL COUNT (" << chan << "): " << fn << endl;
-        chan = 0; samplerate = 0; bps = 0;
+        chan = 0; samplerate = 0; bps = 0; size = 0;
         return NULL;
     }
     if(bps != 8 && bps != 16)
     {
         cerr << "UNSUPPORTED BITS PER SAMPLE (" << bps << "): " << fn << endl;
-        chan = 0; samplerate = 0; bps = 0;
+        chan = 0; samplerate = 0; bps = 0; size = 0;
         return NULL;
     }
-
-    if(!in.read(buffer,4) || strncmp(buffer,"data",4)!=0)
-    {
-        cerr << "MISSING data CHUNK (unsupported WAV layout): " << fn << endl;
-        chan = 0; samplerate = 0; bps = 0;
-        return NULL;
-    }
-    if(!in.read(buffer,4))
-    {
-        cerr << "TRUNCATED data CHUNK: " << fn << endl;
-        chan = 0; samplerate = 0; bps = 0;
-        return NULL;
-    }
-    size = convertToInt(buffer,4);
     if(size <= 0)
     {
         cerr << "EMPTY OR INVALID data CHUNK (" << size << " bytes): " << fn << endl;
@@ -193,6 +225,49 @@ char * loadWAV(const char* fn, int& chan, int& samplerate, int& bps, int& size)
     return data;
 }
 
+// ---------------------------------------------------------------------------
+// Shared buffer cache. alBufferData() copies the samples into the AL buffer, so
+// the CPU-side array is freed immediately instead of being kept alive for the
+// whole run -- that alone was ~120 MB of dead weight.
+// ---------------------------------------------------------------------------
+map<string, ALuint> bufferCache;
+
+ALuint getBuffer(const char* path)
+{
+    string key(path);
+    map<string, ALuint>::iterator it = bufferCache.find(key);
+    if(it != bufferCache.end()) return it->second;
+
+    int channel = 0, sampleRate = 0, bps = 0, size = 0;
+    char* data = loadWAV(path, channel, sampleRate, bps, size);
+    if(data == NULL)
+    {
+        cerr << "FATAL: could not load \"" << path << "\". Aborting." << endl;
+        exit(EXIT_FAILURE);
+    }
+
+    ALenum format;
+    if(channel == 1) format = (bps == 8) ? AL_FORMAT_MONO8   : AL_FORMAT_MONO16;
+    else             format = (bps == 8) ? AL_FORMAT_STEREO8 : AL_FORMAT_STEREO16;
+
+    ALuint bufferid = 0;
+    AL_CHECK(alGenBuffers(1, &bufferid));
+    AL_CHECK(alBufferData(bufferid, format, data, size, sampleRate));
+    delete [] data;
+
+    bufferCache[key] = bufferid;
+    return bufferid;
+}
+
+void freeBufferCache()
+{
+    for(map<string, ALuint>::iterator it = bufferCache.begin(); it != bufferCache.end(); ++it)
+    {
+        AL_CHECK(alDeleteBuffers(1, &it->second));
+    }
+    bufferCache.clear();
+}
+
 enum Sides {topRoom, botRoom, leftRoom, rightRoom};
 
 class room
@@ -201,10 +276,13 @@ private:
     string description;
     string options;
     vector<room*> connectedRooms;
-    vector<unsigned int> bufferids;
-    vector<unsigned int> sourceids;
-    vector<char*> wavData;
+    vector<ALuint> sourceids;
+    //Ambient playback runs on its own thread. It is joined -- never detached --
+    //so it cannot outlive the room and touch sourceids after destruction.
     thread roomSounds;
+    mutex soundMutex;
+    condition_variable soundCv;
+    bool soundStop;
 public:
     room(string roomDescription, string roomOptions, vector<sound> sounds);
     void connectRoom(room* r, Sides roomPosition);
@@ -212,6 +290,8 @@ public:
     void enterRoom();
     void showOptions();
     void getOptions();
+    void startSoundThread();
+    void stopSoundThread();
     void playSounds();
     void pauseSounds();
     void stopSounds();
@@ -223,11 +303,11 @@ room* currentRoom = NULL;
 
 void room::enterRoom()
 {
-    roomSounds = thread(&room::playSounds,this);
+    startSoundThread();
     while (currentRoom == this && gameRunning)
     {
         /* code */
-        system("clear");
+        clearScreen();
         //Tittle
         cout << "                               .___ .____          ___.                 .__        __  .__     " << endl;
         cout << "  __________  __ __  ____    __| _/ |    |   _____ \\_ |__ ___.__._______|__| _____/  |_|  |__  " << endl;
@@ -241,9 +321,7 @@ void room::enterRoom()
         room::showOptions();
         room::getOptions();
     }
-    roomSounds.detach();
-    room::stopSounds();
-    
+    stopSoundThread();
 }
 
 void room::showOptions()
@@ -276,8 +354,9 @@ void room::getOptions()
         break;
     case 'l':
         cout << "Listening the Room... ONLY FOR FIVE SECONDS!!!" << endl;
-        room::playSounds();
-        //room::enterRoom();
+        //Restarts the ambient thread: the sounds replay in the background
+        //instead of freezing the prompt for five seconds.
+        startSoundThread();
         break;
     case 'q':
         tmp = NULL;
@@ -297,13 +376,11 @@ void room::getOptions()
 
 room::room(string roomDescription, string roomOption, vector<sound> sounds)
 {
-    unsigned int bufferid, sourceid;
+    ALuint sourceid = 0;
     description = roomDescription;
     options = roomOption;
+    soundStop = false;
     int n = sounds.size();
-    int channel = 0, sampleRate = 0, bps = 0, size = 0;
-    char* data = NULL;
-    int format = 0;
     room* tmp = NULL;
     //Create 4 posible next rooms
     for (int i = 0; i < 4; i++)
@@ -311,40 +388,14 @@ room::room(string roomDescription, string roomOption, vector<sound> sounds)
         connectedRooms.push_back(tmp);
     }
     
-    //Loads all wav data for the room and creates its buffers and sources
+    //One source per sound; the buffer behind it is shared through the cache.
     for(int i = 0; i < n; i++) {
-        data = loadWAV(sounds.at(i).path,channel,sampleRate,bps,size);
-        if(data == NULL)
-        {
-            cerr << "FATAL: could not load \"" << sounds.at(i).path
-                 << "\". Aborting." << endl;
-            exit(EXIT_FAILURE);
-        }
-        wavData.push_back(data);
-        AL_CHECK(alGenBuffers(1, &bufferid));
-        
-        if(channel==1)
-        {
-            if(bps==8)
-            {
-                format=AL_FORMAT_MONO8;
-            }else{
-                format=AL_FORMAT_MONO16;
-            }
-        }else{
-            if(bps == 8)
-            {
-                format=AL_FORMAT_STEREO8;
-            }else{
-                format=AL_FORMAT_STEREO16;
-            }
-        }
-        AL_CHECK(alBufferData(bufferid,format,data,size,sampleRate));
+        ALuint bufferid = getBuffer(sounds.at(i).path);
+
         AL_CHECK(alGenSources(1,&sourceid));
         AL_CHECK(alSourcei(sourceid,AL_BUFFER,bufferid));
         AL_CHECK(alSourcei(sourceid,AL_LOOPING, AL_TRUE));
 
-        bufferids.push_back(bufferid);
         sourceids.push_back(sourceid);
         AL_CHECK(alSource3f(sourceid,AL_POSITION,sounds.at(i).x,sounds.at(i).y,sounds.at(i).z));
     }
@@ -360,15 +411,43 @@ room* room::gotoRoom(Sides nextRoom)
     return connectedRooms.at(nextRoom);
 }
 
+//Starts (or restarts) the ambient thread. Always joins the previous one first,
+//so only one thread ever touches this room's sources.
+void room::startSoundThread()
+{
+    stopSoundThread();
+    {
+        lock_guard<mutex> lock(soundMutex);
+        soundStop = false;
+    }
+    roomSounds = thread(&room::playSounds, this);
+}
+
+//Signals the ambient thread to finish and waits for it.
+void room::stopSoundThread()
+{
+    if(!roomSounds.joinable()) return;
+    {
+        lock_guard<mutex> lock(soundMutex);
+        soundStop = true;
+    }
+    soundCv.notify_all();
+    roomSounds.join();
+}
+
 void room::playSounds()
 {
     for (size_t i = 0; i < sourceids.size(); i++)
     {
         AL_CHECK(alSourcePlay(sourceids.at(i)));
     }
-    this_thread::sleep_for(chrono::seconds(5));
+    //Sleeps five seconds but wakes immediately if the room is being left, so
+    //quitting the game never has to wait on a sleeping thread.
+    {
+        unique_lock<mutex> lock(soundMutex);
+        soundCv.wait_for(lock, chrono::seconds(5), [this]{ return soundStop; });
+    }
     room::stopSounds();
-
 }
 
 void room::pauseSounds()
@@ -389,24 +468,15 @@ void room::stopSounds()
 
 room::~room()
 {
+    //Join before anything else: the ambient thread reads sourceids.
+    stopSoundThread();
     connectedRooms.clear();
-    //Sources first: a buffer still attached to a live source cannot be deleted.
     for (size_t i = 0; i < sourceids.size(); i++)
     {
         AL_CHECK(alDeleteSources(1,&sourceids.at(i)));
     }
     sourceids.clear();
-    for (size_t i = 0; i < bufferids.size(); i++)
-    {
-        AL_CHECK(alDeleteBuffers(1,&bufferids.at(i)));
-    }
-    bufferids.clear();
-    for (size_t i = 0; i < wavData.size(); i++)
-    {
-        delete [] wavData.at(i);
-    }
-    wavData.clear();
-    
+    //Buffers are shared, so they are released once by freeBufferCache().
 }
 
 int main()
@@ -487,7 +557,7 @@ int main()
 
     room room1(
         "Aqui el personaje escucha una brisa por a alguno de los lados. Asi se guia y se da cuenta de que hay una salida de la cueva. Porque hay brisa",
-    "a: Ir a la izquierda\nd: Ir a la derecha\ns: Ir atras", room1Sounds);
+    "a: Ir a la izquierda\ns: Ir atras", room1Sounds);
 
     room Huesos(
         "Te resbalas hacia un hueco y caes en unos huesos",
@@ -506,8 +576,9 @@ int main()
     "w: Intentar huir del dragon", CogerParteTesoroSounds);
 
     room RioAfuera(
-        "",
-    "a: Ir a la derecha\nw: Meterse al agua", RioAfueraSounds);
+        "Dejas atras al dragon y llegas a la orilla de un rio subterraneo.\n\
+        El agua corre helada y se pierde en la oscuridad. Quiza lleve afuera.",
+    "a: Volver hacia el dragon\nw: Meterse al agua", RioAfueraSounds);
 
     room RioNadando(
         "Llevas mucho tiempo nadando en aquel rio obscuro. No sabes si saldras con vida",
@@ -529,7 +600,8 @@ int main()
 
     room1.connectRoom(&Entrance,botRoom);
     room1.connectRoom(&Huesos,leftRoom); // a para ir a los huesos
-    room1.connectRoom(&room1,rightRoom); // d para ir donde los sabios. Esta parte no esta hecha
+    //La sala de los sabios (d) no esta implementada, asi que no se conecta ni se
+    //ofrece: antes apuntaba a room1 misma y parecia que el juego se colgaba.
     //Aqui faltaria agregar las otras opciones desde esta habitacion
 
     Huesos.connectRoom(&Dragon,topRoom);
@@ -547,7 +619,7 @@ int main()
     RioAfuera.connectRoom(&RioNadando, topRoom); // w Entrar al rio y seguir su curso
 
     RioNadando.connectRoom(&Win, topRoom); // w Seguir nadando
-    RioNadando.connectRoom(&Win, botRoom); // s Ahogarse
+    RioNadando.connectRoom(&GameOver, botRoom); // s Ahogarse: rendirse es perder
 
     Win.connectRoom(&Entrance, topRoom);
     GameOver.connectRoom(&Entrance, topRoom);

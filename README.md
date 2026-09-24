@@ -8,8 +8,14 @@ thread
 # To install openal in your sistem run next line:
 sudo apt-get install libopenal-dev
 
-# In order to Compile with g++ run the next line (note you must have openal installed):
+# To build and run (note you must have openal installed):
+make
+make run
+
+# Or compile by hand:
 g++ -std=c++11 -o main main.cpp -lopenal -lpthread
+
+# Run from the repository root: the sound paths are relative to it.
 
 # Notes
 All sounds must be in WAV format.
