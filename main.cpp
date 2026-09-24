@@ -12,9 +12,57 @@
 
 using namespace std;
 
+// ---------------------------------------------------------------------------
+// OpenAL error checking. AL reports failures through a queue you must drain
+// yourself; wrap every AL call in AL_CHECK(...) so nothing fails silently.
+// ---------------------------------------------------------------------------
+const char* alErrorString(ALenum err)
+{
+    switch(err)
+    {
+    case AL_NO_ERROR:          return "AL_NO_ERROR";
+    case AL_INVALID_NAME:      return "AL_INVALID_NAME";
+    case AL_INVALID_ENUM:      return "AL_INVALID_ENUM";
+    case AL_INVALID_VALUE:     return "AL_INVALID_VALUE";
+    case AL_INVALID_OPERATION: return "AL_INVALID_OPERATION";
+    case AL_OUT_OF_MEMORY:     return "AL_OUT_OF_MEMORY";
+    default:                   return "UNKNOWN_AL_ERROR";
+    }
+}
+
+bool alCheckError(const char* what, const char* file, int line)
+{
+    bool failed = false;
+    for(ALenum err = alGetError(); err != AL_NO_ERROR; err = alGetError())
+    {
+        failed = true;
+        cerr << "[OpenAL] " << alErrorString(err) << " after " << what
+             << " (" << file << ":" << line << ")" << endl;
+    }
+    return failed;
+}
+
+#define AL_CHECK(expr) do { (expr); alCheckError(#expr, __FILE__, __LINE__); } while(0)
+
+// Owns the device/context so they are torn down by the destructor. Declare it
+// before any room: rooms must still have a live context when they delete their
+// sources and buffers.
+struct ALContextGuard
+{
+    ALCdevice*  device;
+    ALCcontext* context;
+    ALContextGuard() : device(NULL), context(NULL) {}
+    ~ALContextGuard()
+    {
+        alcMakeContextCurrent(NULL);
+        if(context) alcDestroyContext(context);
+        if(device)  alcCloseDevice(device);
+    }
+};
+
 struct sound
 {
-    char* path;
+    const char* path;
     int x,y,z;
 }typedef sound;
 
@@ -43,34 +91,105 @@ int convertToInt(char* buffer, int len)
     return a;
 }
 
+// Loads 8/16-bit PCM WAV. On ANY failure it prints the reason, returns NULL and
+// leaves chan/samplerate/bps/size at 0 -- the caller must not use them.
 char * loadWAV(const char* fn, int& chan, int& samplerate, int& bps, int& size)
 {
-    // TODO: Check for errors
+    chan = 0; samplerate = 0; bps = 0; size = 0;
+
     char buffer[4];
-    ifstream in(fn,ios::binary);
-    in.read(buffer,4);
-    if(strncmp(buffer,"RIFF",4)!=0){
-        cout << "THIS IS NOT A WAV FILE" << endl;
+    ifstream in(fn, ios::binary);
+    if(!in)
+    {
+        cerr << "CANNOT OPEN FILE: " << fn << endl;
         return NULL;
     }
-    in.read(buffer,4);
-    in.read(buffer,4);//WAVE
-    in.read(buffer,4);//fmt 
-    in.read(buffer,4);//16
-    in.read(buffer,2);//1
+    if(!in.read(buffer,4) || strncmp(buffer,"RIFF",4)!=0)
+    {
+        cerr << "THIS IS NOT A WAV FILE: " << fn << endl;
+        return NULL;
+    }
+    in.read(buffer,4);                                  //riff chunk size
+    if(!in.read(buffer,4) || strncmp(buffer,"WAVE",4)!=0)
+    {
+        cerr << "MISSING WAVE HEADER: " << fn << endl;
+        return NULL;
+    }
+    if(!in.read(buffer,4) || strncmp(buffer,"fmt ",4)!=0)
+    {
+        cerr << "MISSING fmt CHUNK: " << fn << endl;
+        return NULL;
+    }
+    if(!in.read(buffer,4))
+    {
+        cerr << "TRUNCATED fmt CHUNK: " << fn << endl;
+        return NULL;
+    }
+    int fmtSize = convertToInt(buffer,4);
+    in.read(buffer,2);
+    int audioFormat = convertToInt(buffer,2);           //1 = uncompressed PCM
     in.read(buffer,2);
     chan = convertToInt(buffer,2);
     in.read(buffer,4);
     samplerate = convertToInt(buffer,4);
-    in.read(buffer,4);
-    in.read(buffer,2);
-    in.read(buffer,2);
+    in.read(buffer,4);                                  //byte rate
+    in.read(buffer,2);                                  //block align
+    if(!in.read(buffer,2))
+    {
+        cerr << "TRUNCATED fmt CHUNK: " << fn << endl;
+        chan = 0; samplerate = 0;
+        return NULL;
+    }
     bps = convertToInt(buffer,2);
-    in.read(buffer,4);//data
-    in.read(buffer,4);
+    if(fmtSize > 16) in.seekg(fmtSize - 16, ios::cur);  //skip WAVE_FORMAT_EXTENSIBLE tail
+
+    if(audioFormat != 1)
+    {
+        cerr << "NOT UNCOMPRESSED PCM (format " << audioFormat << "): " << fn << endl;
+        chan = 0; samplerate = 0; bps = 0;
+        return NULL;
+    }
+    if(chan != 1 && chan != 2)
+    {
+        cerr << "UNSUPPORTED CHANNEL COUNT (" << chan << "): " << fn << endl;
+        chan = 0; samplerate = 0; bps = 0;
+        return NULL;
+    }
+    if(bps != 8 && bps != 16)
+    {
+        cerr << "UNSUPPORTED BITS PER SAMPLE (" << bps << "): " << fn << endl;
+        chan = 0; samplerate = 0; bps = 0;
+        return NULL;
+    }
+
+    if(!in.read(buffer,4) || strncmp(buffer,"data",4)!=0)
+    {
+        cerr << "MISSING data CHUNK (unsupported WAV layout): " << fn << endl;
+        chan = 0; samplerate = 0; bps = 0;
+        return NULL;
+    }
+    if(!in.read(buffer,4))
+    {
+        cerr << "TRUNCATED data CHUNK: " << fn << endl;
+        chan = 0; samplerate = 0; bps = 0;
+        return NULL;
+    }
     size = convertToInt(buffer,4);
+    if(size <= 0)
+    {
+        cerr << "EMPTY OR INVALID data CHUNK (" << size << " bytes): " << fn << endl;
+        chan = 0; samplerate = 0; bps = 0; size = 0;
+        return NULL;
+    }
+
     char * data = new char[size];
-    in.read(data,size);
+    if(!in.read(data,size))
+    {
+        cerr << "TRUNCATED AUDIO DATA: " << fn << endl;
+        delete [] data;
+        chan = 0; samplerate = 0; bps = 0; size = 0;
+        return NULL;
+    }
     return data;
 }
 
@@ -157,7 +276,7 @@ void room::getOptions()
         break;
     case 'l':
         cout << "Listening the Room... ONLY FOR FIVE SECONDS!!!" << endl;
-        room:playSounds();
+        room::playSounds();
         //room::enterRoom();
         break;
     case 'q':
@@ -182,9 +301,9 @@ room::room(string roomDescription, string roomOption, vector<sound> sounds)
     description = roomDescription;
     options = roomOption;
     int n = sounds.size();
-    int channel, sampleRate, bps, size;
-    char* data;
-    int format;
+    int channel = 0, sampleRate = 0, bps = 0, size = 0;
+    char* data = NULL;
+    int format = 0;
     room* tmp = NULL;
     //Create 4 posible next rooms
     for (int i = 0; i < 4; i++)
@@ -195,8 +314,14 @@ room::room(string roomDescription, string roomOption, vector<sound> sounds)
     //Loads all wav data for the room and creates its buffers and sources
     for(int i = 0; i < n; i++) {
         data = loadWAV(sounds.at(i).path,channel,sampleRate,bps,size);
+        if(data == NULL)
+        {
+            cerr << "FATAL: could not load \"" << sounds.at(i).path
+                 << "\". Aborting." << endl;
+            exit(EXIT_FAILURE);
+        }
         wavData.push_back(data);
-        alGenBuffers(1, &bufferid);
+        AL_CHECK(alGenBuffers(1, &bufferid));
         
         if(channel==1)
         {
@@ -214,14 +339,14 @@ room::room(string roomDescription, string roomOption, vector<sound> sounds)
                 format=AL_FORMAT_STEREO16;
             }
         }
-        alBufferData(bufferid,format,data,size,sampleRate);
-        alGenSources(1,&sourceid);
-        alSourcei(sourceid,AL_BUFFER,bufferid);
-        alSourcei(sourceid,AL_LOOPING, AL_TRUE);
-        
+        AL_CHECK(alBufferData(bufferid,format,data,size,sampleRate));
+        AL_CHECK(alGenSources(1,&sourceid));
+        AL_CHECK(alSourcei(sourceid,AL_BUFFER,bufferid));
+        AL_CHECK(alSourcei(sourceid,AL_LOOPING, AL_TRUE));
+
         bufferids.push_back(bufferid);
         sourceids.push_back(sourceid);
-        alSource3f(sourceid,AL_POSITION,sounds.at(i).x,sounds.at(i).y,sounds.at(i).z);
+        AL_CHECK(alSource3f(sourceid,AL_POSITION,sounds.at(i).x,sounds.at(i).y,sounds.at(i).z));
     }
 }
 
@@ -237,9 +362,9 @@ room* room::gotoRoom(Sides nextRoom)
 
 void room::playSounds()
 {
-    for (int i = 0; i < sourceids.size(); i++)
+    for (size_t i = 0; i < sourceids.size(); i++)
     {
-        alSourcePlay(sourceids.at(i));
+        AL_CHECK(alSourcePlay(sourceids.at(i)));
     }
     this_thread::sleep_for(chrono::seconds(5));
     room::stopSounds();
@@ -248,60 +373,67 @@ void room::playSounds()
 
 void room::pauseSounds()
 {
-    for (int i = 0; i < sourceids.size(); i++)
+    for (size_t i = 0; i < sourceids.size(); i++)
     {
-        alSourcePause(sourceids.at(i));
+        AL_CHECK(alSourcePause(sourceids.at(i)));
     }
 }
 
 void room::stopSounds()
 {
-    for (int i = 0; i < sourceids.size(); i++)
+    for (size_t i = 0; i < sourceids.size(); i++)
     {
-        alSourceStop(sourceids.at(i));
+        AL_CHECK(alSourceStop(sourceids.at(i)));
     }
 }
 
 room::~room()
 {
     connectedRooms.clear();
-    for (int i = 0; i < bufferids.size(); i++)
-    {     
-        alDeleteSources(1,&bufferids.at(i));
-        alDeleteBuffers(1,&bufferids.at(i));
+    //Sources first: a buffer still attached to a live source cannot be deleted.
+    for (size_t i = 0; i < sourceids.size(); i++)
+    {
+        AL_CHECK(alDeleteSources(1,&sourceids.at(i)));
     }
-    for (int i = 0; i < wavData.size(); i++)
-    {     
+    sourceids.clear();
+    for (size_t i = 0; i < bufferids.size(); i++)
+    {
+        AL_CHECK(alDeleteBuffers(1,&bufferids.at(i)));
+    }
+    bufferids.clear();
+    for (size_t i = 0; i < wavData.size(); i++)
+    {
         delete [] wavData.at(i);
     }
     wavData.clear();
     
 }
 
-int main(int argc, char** argv)
+int main()
 {
-    //INITIALIZATION   
-    ALCdevice* device = alcOpenDevice(NULL);
-    if(device == NULL)
+    //INITIALIZATION
+    //Declared before any room so it is destroyed LAST: ~room() still needs a
+    //live context to delete its sources and buffers.
+    ALContextGuard al;
+
+    al.device = alcOpenDevice(NULL);
+    if(al.device == NULL)
     {
-        cout << "Cannot Open Sound card" << endl;
-        return 0;
+        cerr << "Cannot Open Sound card" << endl;
+        return EXIT_FAILURE;
     }
-    ALCcontext* context = alcCreateContext(device,NULL);
-    if(context == NULL)
+    al.context = alcCreateContext(al.device,NULL);
+    if(al.context == NULL)
     {
-        cout << "Cannot Open Context" << endl;
-        return 0;
+        cerr << "Cannot Open Context" << endl;
+        return EXIT_FAILURE;
     }
-    alcMakeContextCurrent(context);
-    
+    alcMakeContextCurrent(al.context);
+
     ALfloat listenerOri[] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f};
-    alListener3f(AL_POSITION, 0.0f, 0.0f, 1.0f);
-    // check for errors
-    alListener3f(AL_VELOCITY, 0, 0, 0);
-    // check for errors
-    alListenerfv(AL_ORIENTATION, listenerOri);
-    // check for errors
+    AL_CHECK(alListener3f(AL_POSITION, 0.0f, 0.0f, 1.0f));
+    AL_CHECK(alListener3f(AL_VELOCITY, 0, 0, 0));
+    AL_CHECK(alListenerfv(AL_ORIENTATION, listenerOri));
 
     vector<sound> EntranceSounds;
     vector<sound> room1Sounds;
@@ -321,8 +453,8 @@ int main(int argc, char** argv)
     room1Sounds.push_back({"./assets/sounds/Pasos Caminando.wav",0,0,0});
 
     HuesosSounds.push_back({"./assets/sounds/Sonido de la cueva.wav",0,0,0});
-    HuesosSounds.push_back({"./assets/sounds/mono/Sonido Fractura de huesos.wav",2,0,3});
-    HuesosSounds.push_back({"./assets/sounds/mono/Sonido Fractura de huesos.wav",-2,0,-1});
+    HuesosSounds.push_back({"./assets/sounds/mono/Sonido Fractura de hueso.wav",2,0,3});
+    HuesosSounds.push_back({"./assets/sounds/mono/Sonido Fractura de hueso.wav",-2,0,-1});
     HuesosSounds.push_back({"./assets/sounds/mono/Sonido Dragon Durmiendo.wav",0,0,15});
 
     DragonSounds.push_back({"./assets/sounds/Sonido Dragon Durmiendo.wav",0,0,0});
@@ -335,7 +467,7 @@ int main(int argc, char** argv)
     
     RioNadandoSounds.push_back({"./assets/sounds/mono/Sonido agua.wav",0,0,0});
     
-    WinSounds.push_back({"./assets/sounds/mono/Sonido algo.wav",0,0,0});
+    WinSounds.push_back({"./assets/sounds/mono/algo.wav",0,0,0});
 
     GameOverSounds.push_back({"./assets/sounds/mono/Sonido Fuego Dragon.wav",0,0,0});
     GameOverSounds.push_back({"./assets/sounds/mono/Sonido Entorno en Llamas.wav",0,0,0});
@@ -430,8 +562,6 @@ int main(int argc, char** argv)
         currentRoom->enterRoom();
     }
 
-    alcDestroyContext(context);
-    alcCloseDevice(device);
-    
+    //Device and context are released by ~ALContextGuard, after every room.
     return 0;
 }
